@@ -1,0 +1,90 @@
+<%- include('head', { title: 'Metabase Interactive Embedding Sample' }) -%>
+
+<main>
+  <h1>Metabase interactive embedding sample</h1>
+  <%- message %>
+
+  <p>
+    Embedded dashboard from <strong><%= siteUrl %><%= dashboardPath %></strong>
+  </p>
+
+  <div class="surface-muted">
+    <iframe
+      id="metabase-embed"
+      src="<%= iframeUrl %>"
+      title="Metabase dashboard"
+      width="100%"
+      frameborder="0"
+      scrolling="no"
+      style="
+        border-radius: 18px;
+        border: 0;
+        width: 100%;
+        background: #F4F5FA;
+        min-height: <%= minHeight %>px;
+      "
+      allowtransparency="true"
+      allow="fullscreen"
+    ></iframe>
+  </div>
+</main>
+
+<script>
+  (function () {
+    const iframe = document.getElementById("metabase-embed");
+    if (!iframe) return;
+
+    const MIN_HEIGHT = Number(<%= minHeight %>);
+    const EXTRA_HEIGHT = Number(<%= extraHeight %>);
+    const METABASE_ORIGIN = new URL("<%= siteUrl %>").origin;
+
+    let lastSuggested = MIN_HEIGHT;
+
+    const applyHeight = (height) => {
+      const target = Math.max(height, MIN_HEIGHT);
+      lastSuggested = target;
+      iframe.style.height = `${target}px`;
+    };
+
+    // Fallback: fill viewport plus extra so page scroll is outside iframe.
+    const computeFallbackHeight = () =>
+      Math.max(window.innerHeight + EXTRA_HEIGHT, MIN_HEIGHT);
+
+    applyHeight(computeFallbackHeight());
+
+    window.addEventListener(
+      "message",
+      (event) => {
+        if (event.origin !== METABASE_ORIGIN) return;
+        const data = event.data;
+        if (!data || typeof data !== "object") return;
+
+        const height =
+          data.height ||
+          data.frameHeight ||
+          (Array.isArray(data) &&
+            data.length > 1 &&
+            data[0] === "dashboardHeight" &&
+            Number(data[1])) ||
+          (data.type === "resize" && data.payload && data.payload.height);
+
+        if (typeof height === "number" && Number.isFinite(height)) {
+          applyHeight(height + 24);
+        }
+      },
+      false,
+    );
+
+    window.addEventListener(
+      "resize",
+      () => {
+        if (window.innerHeight + EXTRA_HEIGHT > lastSuggested) {
+          applyHeight(computeFallbackHeight());
+        }
+      },
+      { passive: true },
+    );
+  })();
+</script>
+
+<%- include('foot') -%>

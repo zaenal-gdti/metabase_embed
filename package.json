@@ -1,0 +1,20 @@
+{
+  "name": "metabase-interactive-embed-app",
+  "version": "1.0.0",
+  "description": "Interactive Metabase embedding sample rebuilt from the official Express example.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.9",
+    "express": "^4.21.1",
+    "express-session": "^1.18.1",
+    "jsonwebtoken": "^9.0.2",
+    "pbkdf2-password": "^1.2.1"
+  }
+}

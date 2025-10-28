@@ -1,0 +1,1 @@
+PATH="/home/zaenal/node-v22.12.0-linux-x64/bin:$PATH" npm start
