@@ -9,7 +9,13 @@ const METABASE_JWT_SHARED_SECRET =
   "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const METABASE_DASHBOARD_PATH =
   process.env.METABASE_DASHBOARD_PATH || "/dashboard/1";
-const EMBED_MODIFIERS = process.env.METABASE_EMBED_PARAMS || "logo=false";
+const EMBED_MODIFIERS =
+  process.env.METABASE_EMBED_PARAMS || "embed=true&logo=false";
+const EMBED_QUERY_PARAMS = new URLSearchParams(EMBED_MODIFIERS);
+const METABASE_SESSION_TTL_MS = Number.parseInt(
+  process.env.METABASE_SESSION_TTL_MS || `${1000 * 60 * 8}`,
+  10,
+);
 const METABASE_EMBED_MIN_HEIGHT = Number.parseInt(
   process.env.METABASE_EMBED_MIN_HEIGHT || "1400",
   10,
@@ -18,6 +24,8 @@ const METABASE_EMBED_EXTRA_HEIGHT = Number.parseInt(
   process.env.METABASE_EMBED_EXTRA_HEIGHT || "400",
   10,
 );
+const METABASE_DEFAULT_USER_EMAIL =
+  (process.env.METABASE_DEFAULT_USER_EMAIL || "").trim();
 
 const express = require("express");
 const hash = require("pbkdf2-password")();
@@ -84,6 +92,59 @@ function findUserByEmail(email) {
   return users.find((user) => user.email === email);
 }
 
+function getDefaultUser() {
+  if (METABASE_DEFAULT_USER_EMAIL) {
+    const matched = findUserByEmail(METABASE_DEFAULT_USER_EMAIL);
+    if (matched) {
+      return matched;
+    }
+    console.warn(
+      `Default embed user "${METABASE_DEFAULT_USER_EMAIL}" not found; using fallback user.`,
+    );
+  }
+  if (users.length === 0) {
+    return null;
+  }
+  return users[0];
+}
+
+function normalizeReturnToPath(rawPath) {
+  if (!rawPath) {
+    return METABASE_DASHBOARD_PATH;
+  }
+
+  if (/^https?:\/\//i.test(rawPath)) {
+    try {
+      const asUrl = new URL(rawPath);
+      return `${asUrl.pathname}${asUrl.search}` || METABASE_DASHBOARD_PATH;
+    } catch (err) {
+      console.warn("Failed to normalize absolute return_to path", err);
+      return METABASE_DASHBOARD_PATH;
+    }
+  }
+
+  if (!rawPath.startsWith("/")) {
+    return `/${rawPath}`;
+  }
+
+  return rawPath;
+}
+
+function applyEmbedModifiers(rawPath) {
+  const normalized = normalizeReturnToPath(rawPath);
+  const [pathname, search = ""] = normalized.split("?");
+  const params = new URLSearchParams(search);
+
+  EMBED_QUERY_PARAMS.forEach((value, key) => {
+    if (!params.has(key)) {
+      params.append(key, value);
+    }
+  });
+
+  const queryString = params.toString();
+  return queryString ? `${pathname}?${queryString}` : pathname;
+}
+
 // Authenticate using in-memory users list
 function authenticate(email, pass, fn) {
   if (!module.parent) console.log("authenticating %s:%s", email, pass);
@@ -96,14 +157,20 @@ function authenticate(email, pass, fn) {
   });
 }
 
-function restrict(req, res, next) {
+function ensureUserSession(req, res, next) {
   if (req.session.user) {
-    next();
-  } else {
-    req.session.returnTo = req.originalUrl;
-    req.session.error = "Please sign in to continue.";
-    res.redirect("/login");
+    return next();
   }
+  const defaultUser = getDefaultUser();
+  if (!defaultUser) {
+    req.session.returnTo = req.originalUrl;
+    req.session.error =
+      "No default user is available. Please sign in to continue.";
+    return res.redirect("/login");
+  }
+  req.session.user = { ...defaultUser };
+  req.session.success = `Signed in automatically as ${defaultUser.firstName}.`;
+  next();
 }
 
 const signUserToken = (user) =>
@@ -123,7 +190,7 @@ app.get("/", function (req, res) {
   res.redirect("/analytics");
 });
 
-app.get("/analytics", restrict, function (req, res) {
+app.get("/analytics", ensureUserSession, function (req, res) {
   const iframeUrl = `/sso/metabase?return_to=${METABASE_DASHBOARD_PATH}`;
   res.render("dashboard", {
     iframeUrl,
@@ -168,15 +235,70 @@ app.post("/login", function (req, res, next) {
   });
 });
 
-app.get("/sso/metabase", restrict, (req, res) => {
+async function refreshMetabaseSession(req, returnToWithModifiers) {
   const ssoUrl = new URL("/auth/sso", METABASE_SITE_URL);
   ssoUrl.searchParams.set("jwt", signUserToken(req.session.user));
-  ssoUrl.searchParams.set(
-    "return_to",
-    `${req.query.return_to ?? "/"}?${EMBED_MODIFIERS}`
-  );
+  ssoUrl.searchParams.set("return_to", returnToWithModifiers);
 
-  res.redirect(ssoUrl);
+  const response = await fetch(ssoUrl.toString(), {
+    redirect: "manual",
+  });
+
+  if (response.status !== 302) {
+    const sample = await response.text();
+    throw new Error(
+      `Metabase SSO failed (${response.status}). ${sample.slice(0, 200)}`
+    );
+  }
+
+  const rawCookies =
+    typeof response.headers.getSetCookie === "function"
+      ? response.headers.getSetCookie()
+      : [];
+  if (!rawCookies.length) {
+    throw new Error("Metabase SSO did not return Set-Cookie headers.");
+  }
+
+  return {
+    cookies: rawCookies,
+    expiresAt: Date.now() + METABASE_SESSION_TTL_MS,
+  };
+}
+
+function ensureMetabaseSession(req, returnToWithModifiers) {
+  if (
+    req.session.metabaseSession &&
+    req.session.metabaseSession.expiresAt > Date.now()
+  ) {
+    return Promise.resolve(req.session.metabaseSession);
+  }
+
+  return refreshMetabaseSession(req, returnToWithModifiers).then((session) => {
+    req.session.metabaseSession = session;
+    return session;
+  });
+}
+
+function attachMetabaseCookies(res, cookies) {
+  cookies.forEach((cookie) => {
+    res.append("Set-Cookie", cookie);
+  });
+}
+
+app.get("/sso/metabase", ensureUserSession, async (req, res, next) => {
+  try {
+    const rawReturnTo = req.query.return_to || METABASE_DASHBOARD_PATH;
+    const returnToWithModifiers = applyEmbedModifiers(rawReturnTo);
+    const session = await ensureMetabaseSession(req, returnToWithModifiers);
+    attachMetabaseCookies(res, session.cookies);
+    const redirectTarget = new URL(
+      returnToWithModifiers,
+      METABASE_SITE_URL
+    ).toString();
+    res.redirect(redirectTarget);
+  } catch (err) {
+    next(err);
+  }
 });
 
 const PORT = process.env.PORT || 9090;

@@ -1,1 +1,7 @@
-PATH="/home/zaenal/node-v22.12.0-linux-x64/bin:$PATH" npm start
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ensure the locally installed Node.js binaries are available
+PATH="$HOME/.local/node-v20.11.1/bin:$PATH"
+
+exec npm start

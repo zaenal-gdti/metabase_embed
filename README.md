@@ -17,8 +17,10 @@ METABASE_JWT_SHARED_SECRET=<paste the JWT shared secret from Metabase>
 METABASE_DASHBOARD_PATH=/dashboard/1
 # optional
 PORT=9090
-METABASE_EMBED_PARAMS=logo=false
+METABASE_EMBED_PARAMS=embed=true&logo=false
 SESSION_SECRET=change-me
+METABASE_DEFAULT_USER_EMAIL=rene@example.com
+METABASE_SESSION_TTL_MS=480000
 ```
 
 If you keep a `.env` file at the project root these values will be loaded automatically.
@@ -33,7 +35,7 @@ METABASE_JWT_SHARED_SECRET=... npm start
 npm start
 ```
 
-Browse to `http://localhost:9090/analytics`. Login with the sample credentials shown on the login page. The app will redirect to Metabase’s SSO endpoint with a signed JWT and load the interactive dashboard specified by `METABASE_DASHBOARD_PATH`.
+Browse to `http://localhost:9090/analytics`. The app automatically signs you in using the configured default embed user (first sample user unless overridden by `METABASE_DEFAULT_USER_EMAIL`), then redirects to Metabase’s SSO endpoint with a signed JWT and loads the interactive dashboard specified by `METABASE_DASHBOARD_PATH`. You can still open `/login` if you want to switch between the sample users manually.
 
 ## Useful commands
 
@@ -42,6 +44,7 @@ Browse to `http://localhost:9090/analytics`. Login with the sample credentials s
 
 ## Notes
 
-- The sample users are defined in-memory (`index.js`) and share the password `foobar`.
+- The sample users are defined in-memory (`index.js`) and share the password `foobar`. By default the first user is used for automatic sign-in.
 - The Metabase JWT token is valid for 10 minutes; refresh the page to generate a new one.
-- Ensure your Metabase embedding settings allow the origin you serve the iframe from (e.g. `http://localhost:*`).
+- Ensure your Metabase embedding settings allow the origin you serve the iframe from (e.g. `http://localhost:*`) and keep `embed=true` in `METABASE_EMBED_PARAMS` so Metabase renders the embedded experience instead of the login page.
+- The app reuses the Metabase session cookie server-side and re-emits it on `/sso/metabase`, so the iframe loads without showing the Metabase login. Adjust `METABASE_SESSION_TTL_MS` (default 480000 ms) if you need the server to refresh the session more or less frequently.
